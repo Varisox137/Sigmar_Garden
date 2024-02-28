@@ -1,0 +1,7 @@
+.idea/
+build/
+dist/
+*.spec
+crash/
+xxx/
+*.exe
