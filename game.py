@@ -3,6 +3,8 @@
 import pygame as pg
 import sys,os,random
 
+TEST_FLAG=False
+
 class GridPos:
     XY=1
     RSS=2
@@ -99,6 +101,8 @@ class GridPos:
             return False
 
 class Atom(pg.sprite.Sprite):
+    TRANSPARENT=64
+
     def __init__(self,
                  name:str,
                  image:pg.Surface,
@@ -129,7 +133,6 @@ class Atom(pg.sprite.Sprite):
                     break
             else:
                 self.unlock=free
-        self.image.set_alpha(255 if self.unlock else 64)
         # update selection
         if not all(self.selection_refreshed):
             base=self.base_image.copy()
@@ -140,13 +143,20 @@ class Atom(pg.sprite.Sprite):
             if self.selection[0]: # LMB: selection
                 base.blit(resources['grid']['selection'][0],(0,0))
             self.image=base.copy()
-            self.image.set_alpha(255 if self.unlock else 64)
+            self.image.set_alpha(255 if self.unlock else Atom.TRANSPARENT)
             self.selection_refreshed[1]=True
             self.selection_refreshed[0]=True
+        self.image.set_alpha(255 if self.unlock else Atom.TRANSPARENT)
 
 def read_save()->dict:
     save=dict()
-    img=pg.image.load('./res/disposal.png')
+    try:
+        img=pg.image.load('./res/disposal.png')
+    except FileNotFoundError:
+        # init new save pixel
+        base_img=pg.image.load('./res/grid/disposal.png')
+        pg.image.save(base_img,'./res/disposal.png')
+        img=pg.image.load('./res/disposal.png')
     c=img.get_at((0,0))
     save['mode']='advanced' if c[3] else 'normal'
     save['count']=c[0]*2**16+c[1]*2**8+c[2]
@@ -245,17 +255,75 @@ def get_atom_pool_converted(resources:dict,advanced:bool)->list:
             pool.append((each,atoms[each]))
     return [(each[0],each[1].convert_alpha()) for each in pool]
 
-def fill_atoms(atom_pool:list,atom_slots:list,atom_group:pg.sprite.Group)->None:
+def fill_atoms(atom_pool:list,atom_slots:list)->list[Atom]:
+    atoms=[]
     random.shuffle(atom_pool)
     random.shuffle(atom_slots)
     gold_index=[i for i,each in enumerate(atom_pool) if each[0]=='gold'][0]
     gold_atom_tuple=atom_pool.pop(gold_index)
     center_index=[i for i,each in enumerate(atom_slots) if each==(0,0,0)][0]
     center_tuple=atom_slots.pop(center_index)
-    atom_group.add(Atom(name='gold',image=gold_atom_tuple[1],pos=center_tuple,pos_format=GridPos.RSS))
+    atoms.append(Atom(name='gold',image=gold_atom_tuple[1],pos=center_tuple,pos_format=GridPos.RSS))
     for i,slot in enumerate(atom_slots):
         new_atom=Atom(name=atom_pool[i][0],image=atom_pool[i][1],pos=slot,pos_format=GridPos.RSS)
-        atom_group.add(new_atom)
+        atoms.append(new_atom)
+    return sorted(atoms,key=lambda x: x.pos.rss)
+
+def draw_atoms_on_new_game(main_screen:pg.Surface,
+                           resources:dict,
+                           filled_list:list[Atom])->pg.sprite.Group:
+    atom_group=pg.sprite.Group()
+    # generate spiral sequence
+    spiral=[]
+    r,sg,st=(0,0,0)
+    while r<=5:
+        spiral.append((r,sg,st))
+        # rss increment; note that (sg,st)==(5,0) signals the need for r+=1
+        # for r+=1, we use rss+=(1,0,1) for xyz+=(1,0,0)
+        if r==0:
+            r,sg,st=1,0,0
+        elif (sg,st)==(5,0):
+            st+=1
+            r+=1
+        else:
+            st+=1
+        if st>=r:
+            st=0
+            sg+=1
+            if sg>=6:
+                sg=0
+    # prepare aura resource, remember to copy incase not to modify the original alpha
+    aura_sf=resources['grid']['selection'][1].copy()
+    aura_sf.set_alpha(80)
+    # render in spiral sequence
+    for i,slot in enumerate(spiral):
+        # render board and already-grouped atoms
+        main_screen.blit(resources['board'],(0,0))
+        atom_group.draw(main_screen)
+        # try search for atom on slot (==spiral[i]), then show aura in spiral[i+1]
+        found=False
+        # adds new atom
+        for atom in filled_list:
+            if atom.pos.rss==slot:
+                filled_list.remove(atom)
+                atom_group.add(atom)
+                # update immediately
+                atom_group.update(resources)
+                found=True
+                break
+        if found:
+            main_screen.blit(resources['board'],(0,0))
+            atom_group.draw(main_screen)
+        # show aura in spiral[i+1]
+        if i+1<len(spiral):
+            next_slot=spiral[i+1]
+            aura_xy=GridPos.xyz2xy(GridPos.rss2xyz(next_slot))
+            main_screen.blit(aura_sf,aura_xy)
+        # refresh screen
+        pg.display.flip()
+        # wait for a short time
+        pg.time.wait(25)
+    return atom_group
 
 def render_winnings(main_screen:pg.Surface,
                     resources:dict,
@@ -328,13 +396,16 @@ def new_game(main_screen:pg.Surface,
     atom_slots=generate_slots_rss()
     atom_pool=get_atom_pool_converted(resources,save['mode']=='advanced')
     assert len(atom_slots)==len(atom_pool)==55, 'SlotOrPoolCountError'
+    # fill atoms to position
+    filled_list=fill_atoms(atom_pool,atom_slots)
+    # todo: TEST-ONLY, convenience for testing render logic of winning effect
+    if TEST_FLAG:
+        filled_list=[Atom(name='gold',image=resources['grid']['atoms']['gold'],
+                          pos=(0,0,0),pos_format=GridPos.RSS),
+                     Atom(name='gold',image=resources['grid']['atoms']['gold'],
+                          pos=(2,0,0),pos_format=GridPos.RSS),]
     # assign group and draw atoms onto screen
-    atom_group=pg.sprite.Group()
-    fill_atoms(atom_pool,atom_slots,atom_group)
-    atom_group.update(resources)
-    atom_group.draw(main_screen)
-    # refresh display
-    pg.display.flip() # todo: comment this
+    atom_group=draw_atoms_on_new_game(main_screen,resources,filled_list)
     # render indicators when game starts
     render_indicators(main_screen,atom_group,resources,status,save)
     # render winnings when game starts
@@ -459,10 +530,12 @@ def handle_event(event:pg.event.Event,
         if event.key==pg.K_ESCAPE:
             if flags['rules']:
                 flags['rules']=False
+                flags['refresh']=True
             else:
                 quit_game(save)
         elif event.key==pg.K_r:
             flags['rules']=not flags['rules']
+            flags['refresh']=True
         elif event.key==pg.K_n:
             return new_game(main_screen,resources,status,save)
         elif event.key==pg.K_m:
@@ -478,13 +551,14 @@ def handle_event(event:pg.event.Event,
             # quits rules explanation or quits game
             if flags['rules']:
                 flags['rules']=False
-                # no need to refresh screen, for refresh_screen called after handle_event for-loop
+                flags['refresh']=True
             else:
                 quit_game(save)
         elif new[0]<=click_pos[0]<new[1] and new[2]<=click_pos[1]<new[3]:
             return new_game(main_screen,resources,status,save)
         elif rules[0]<=click_pos[0]<rules[1] and rules[2]<=click_pos[1]<rules[3]:
             flags['rules']=True
+            flags['refresh']=True
         elif not flags['finished']:
             # check if click on an atom
             for atom in atom_group:
@@ -492,7 +566,7 @@ def handle_event(event:pg.event.Event,
                     # first check game mode change
                     if flags['start']:
                         flags['start']=False
-                        if click_button==1 and atom.name=='gold':
+                        if click_button==1 and atom.name=='gold' and atom.pos.rss==(0,0,0):
                             save['mode']='advanced' if save['mode']=='normal' else 'normal'
                             return new_game(main_screen,resources,status,save)
                     # left-click: selection
@@ -543,15 +617,36 @@ def refresh_screen(main_screen:pg.Surface,
         atom_group.update(resources)
         flags['finished']=True if not atom_group else False
         # refresh atoms display
-        main_screen.blit(resources['board'],(0,0))
         atom_group.draw(main_screen)
         # render indicators
         render_indicators(main_screen,atom_group,resources,status,save)
         # add to count when successfully winning a game
         if flags['finished'] and not pre:
             save['count']+=1
+            # todo: TEST-ONLY, allowing setting winning counts
+            if TEST_FLAG:
+                print(f"Winning count: {save['count']}")
+                rs=input('Reset winning count ?= ')
+                if rs: save['count']=int(rs)
         # render winnings
         render_winnings(main_screen,resources,status,save)
+        # render winning effects
+        if flags['finished'] and not pre:
+            pattern=resources['grid']['selection'][1].copy()
+            pattern.set_alpha(80)
+            # render by r increment
+            for r in range(5+1):
+                main_screen.blit(resources['board'],(0,0))
+                render_winnings(main_screen,resources,status,save)
+                ring=([(0,0,0)] if r==0
+                      else [(r,sg,st) for st in range(r) for sg in range(6)])
+                for grid in ring:
+                    xy=GridPos.xyz2xy(GridPos.rss2xyz(grid))
+                    main_screen.blit(pattern,xy)
+                pg.display.flip()
+                pg.time.wait(150)
+            main_screen.blit(resources['board'],(0,0))
+            render_winnings(main_screen,resources,status,save)
     # refresh display
     pg.display.flip()
     return main_screen
@@ -608,6 +703,7 @@ def decrypt_crash_file(filename:str)->None:
 
 if __name__=='__main__':
     try:
+        TEST_FLAG=bool(input('*** TEST MODE ?= '))
         main()
     except (SystemExit,KeyboardInterrupt): pass
     except:
