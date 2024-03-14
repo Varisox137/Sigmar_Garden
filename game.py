@@ -404,7 +404,7 @@ def new_game(main_screen:pg.Surface,
                           pos=(0,0,0),pos_format=GridPos.RSS),
                      Atom(name='gold',image=resources['grid']['atoms']['gold'],
                           pos=(2,0,0),pos_format=GridPos.RSS),]
-    # assign group and draw atoms onto screen
+    # assign group and draw atoms onto screen, with effects of selection[1]
     atom_group=draw_atoms_on_new_game(main_screen,resources,filled_list)
     # render indicators when game starts
     render_indicators(main_screen,atom_group,resources,status,save)
@@ -594,6 +594,27 @@ def handle_event(event:pg.event.Event,
                     break
     return atom_group
 
+def render_winning_effect(main_screen:pg.Surface,
+                          resources:dict,
+                          status:dict,
+                          save:dict)->None:
+    pattern=resources['grid']['selection'][1].copy()
+    pattern.set_alpha(80)
+    # render by r increment
+    for r in range(5+1):
+        main_screen.blit(resources['board'],(0,0))
+        render_winnings(main_screen,resources,status,save)
+        ring=([(0,0,0)] if r==0
+              else [(r,sg,st) for st in range(r) for sg in range(6)])
+        for grid in ring:
+            xy=GridPos.xyz2xy(GridPos.rss2xyz(grid))
+            main_screen.blit(pattern,xy)
+        pg.display.flip()
+        pg.time.wait(150)
+    main_screen.blit(resources['board'],(0,0))
+    render_winnings(main_screen,resources,status,save)
+    pg.display.flip()
+
 def refresh_screen(main_screen:pg.Surface,
                    atom_group:pg.sprite.Group,
                    resources:dict,
@@ -632,22 +653,8 @@ def refresh_screen(main_screen:pg.Surface,
         render_winnings(main_screen,resources,status,save)
         # render winning effects
         if flags['finished'] and not pre:
-            pattern=resources['grid']['selection'][1].copy()
-            pattern.set_alpha(80)
-            # render by r increment
-            for r in range(5+1):
-                main_screen.blit(resources['board'],(0,0))
-                render_winnings(main_screen,resources,status,save)
-                ring=([(0,0,0)] if r==0
-                      else [(r,sg,st) for st in range(r) for sg in range(6)])
-                for grid in ring:
-                    xy=GridPos.xyz2xy(GridPos.rss2xyz(grid))
-                    main_screen.blit(pattern,xy)
-                pg.display.flip()
-                pg.time.wait(150)
-            main_screen.blit(resources['board'],(0,0))
-            render_winnings(main_screen,resources,status,save)
-    # refresh display
+            render_winning_effect(main_screen,resources,status,save)
+    # refresh display unconditionally
     pg.display.flip()
     return main_screen
 
@@ -703,7 +710,7 @@ def decrypt_crash_file(filename:str)->None:
 
 if __name__=='__main__':
     try:
-        TEST_FLAG=bool(input('*** TEST MODE ?= '))
+        # TEST_FLAG=bool(input('*** TEST MODE ?= '))
         main()
     except (SystemExit,KeyboardInterrupt): pass
     except:
